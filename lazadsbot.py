@@ -1591,6 +1591,7 @@ async def handle_key_count(msg: Message, state: FSMContext):
                             created_by=msg.from_user.id))
             keys.append(k)
         await s.commit()
+    async with get_db() as s:
         await add_audit(s, msg.from_user.id, "gen_keys",
                         details=f"{count}x {plan} {days}d")
     await state.clear()
@@ -1647,6 +1648,7 @@ async def handle_key_revoke(msg: Message, state: FSMContext):
         ak.used = True
         ak.used_at = datetime.now(timezone.utc)
         await s.commit()
+    async with get_db() as s:
         await add_audit(s, msg.from_user.id, "revoke_key", target=key_str)
     await state.clear()
     await msg.answer(f"{ce(E_DONE,'✅')} Key <code>{key_str}</code> revoked.",
