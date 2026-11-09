@@ -897,6 +897,11 @@ async def _save_account(event: Message, state: FSMContext, client, me, phone: st
     owner_id = event.chat.id
 
     try:
+        await client.disconnect()
+    except Exception:
+        pass
+
+    try:
         async with get_db() as s:
             acct = HostedAccount(
                 owner_id=owner_id,
@@ -909,38 +914,17 @@ async def _save_account(event: Message, state: FSMContext, client, me, phone: st
             await s.commit()
     except Exception as e:
         log.exception("_save_account DB error: %s", e)
-        await client.disconnect()
         await state.clear()
         await event.edit_text(f"{ce(E_CROSS,'❌')} DB error saving account: <code>{e}</code>",
                                parse_mode="HTML")
         return
 
-    # Apply branding (name + bio) — best-effort, never blocks success message
-    try:
-        if not client.is_connected():
-            await asyncio.wait_for(client.connect(), timeout=10)
-        await asyncio.wait_for(
-            client(UpdateProfileRequest(
-                last_name=f"• Via @{BOT_USERNAME}",
-                about=f"Ads via @{BOT_USERNAME}.\nPowered by {MUST_JOIN}",
-            )),
-            timeout=10,
-        )
-        log.info("Branding applied to account id=%s", me.id)
-    except Exception as e:
-        log.warning("Branding failed for account id=%s: %s", me.id, e)
-    finally:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
-
     await state.clear()
     display = me.username or me.first_name or "Unknown"
     await event.edit_text(
         f"{ce(E_DONE,'✅')} <b>Account added!</b>\n\n"
-        f"<b>@{display}</b>\n"
-        f"Name + bio updated with LazAdsBot branding.",
+        f"👤 <b>{display}</b>\n"
+        f"📱 Saved and ready to broadcast.",
         parse_mode="HTML",
         reply_markup=kb_back("accounts_menu")
     )
