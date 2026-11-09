@@ -590,12 +590,6 @@ async def handle_phone(message: Message, state: FSMContext) -> None:
     pending_clients[message.from_user.id] = client
     otp_buffers[message.from_user.id] = ""
 
-    # Indian numbers (+91) don't receive OTP via the default flow —
-    # Telegram sends it to the Telegram app (not SMS). We request SMS
-    # explicitly by calling send_code_request and then resend_code with
-    # type SentCodeTypeSms so the code arrives as a plain SMS.
-    is_indian = phone.startswith("+91")
-
     try:
         result = await asyncio.wait_for(
             client.send_code_request(phone), timeout=20
@@ -622,33 +616,15 @@ async def handle_phone(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    # For Indian numbers: if the code was NOT sent via SMS, force a resend as SMS
-    if is_indian:
-        try:
-            from telethon.tl.types import SentCodeTypeSms, SentCodeTypeApp
-            sent_type = type(result.type)
-            if sent_type is not SentCodeTypeSms:
-                # resend to get SMS instead of in-app notification
-                result = await asyncio.wait_for(
-                    client.resend_code(phone, result.phone_code_hash),
-                    timeout=20,
-                )
-        except Exception:
-            pass  # resend failed — proceed with original result, code may still work
-
     await wait_msg.delete()
-
-    if is_indian:
-        delivery_note = "<i>Check SMS or your Telegram app for the code.</i>"
-    else:
-        delivery_note = "<i>Check your Telegram app for the code.</i>"
 
     otp_msg = await message.answer(
         f"<b>OTP sent to</b> <code>{phone}</code>\n\n"
         f"Enter the code using the keypad below.\n"
         f"<b>Code:</b>  <code>_____</code>\n\n"
-        f"{delivery_note}",
+        f"<i>Check your Telegram app for the code.</i>",
         reply_markup=kb_otp_pad(),
+        parse_mode="HTML",
     )
     await state.update_data(phone=phone, phone_code_hash=result.phone_code_hash,
                              otp_msg_id=otp_msg.message_id)
