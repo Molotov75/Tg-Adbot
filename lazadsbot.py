@@ -178,6 +178,17 @@ class BotSettings(Base):
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safe migrations — add columns that may not exist on the live DB
+        migrations = [
+            "ALTER TABLE laz_broadcast_config ADD COLUMN IF NOT EXISTS auto_join_list TEXT",
+            "ALTER TABLE laz_broadcast_config ADD COLUMN IF NOT EXISTS service_type VARCHAR(64)",
+            "ALTER TABLE laz_broadcast_config ADD COLUMN IF NOT EXISTS target_groups TEXT",
+        ]
+        for sql in migrations:
+            try:
+                await conn.execute(__import__("sqlalchemy").text(sql))
+            except Exception as e:
+                log.warning("Migration skipped (%s): %s", sql[:60], e)
     log.info("LazAdsBot DB ready.")
 
 
