@@ -896,33 +896,44 @@ async def _save_account(event: Message, state: FSMContext, client, me, phone: st
     new_session = client.session.save()
     owner_id = event.chat.id
 
-    async with get_db() as s:
-        acct = HostedAccount(
-            owner_id=owner_id,
-            phone=phone,
-            session_string=new_session,
-            tg_user_id=me.id,
-            tg_username=me.username,
-        )
-        s.add(acct)
-        await s.commit()
+    try:
+        async with get_db() as s:
+            acct = HostedAccount(
+                owner_id=owner_id,
+                phone=phone,
+                session_string=new_session,
+                tg_user_id=me.id,
+                tg_username=me.username,
+            )
+            s.add(acct)
+            await s.commit()
+    except Exception as e:
+        log.exception("_save_account DB error: %s", e)
+        await client.disconnect()
+        await state.clear()
+        await event.edit_text(f"{ce(E_CROSS,'❌')} DB error saving account: <code>{e}</code>",
+                               parse_mode="HTML")
+        return
 
-    # Apply branding (name + bio)
+    # Apply branding (name + bio) — best-effort, never blocks success message
     try:
         if not client.is_connected():
-            await asyncio.wait_for(client.connect(), timeout=15)
+            await asyncio.wait_for(client.connect(), timeout=10)
         await asyncio.wait_for(
             client(UpdateProfileRequest(
                 last_name=f"• Via @{BOT_USERNAME}",
                 about=f"Ads via @{BOT_USERNAME}.\nPowered by {MUST_JOIN}",
             )),
-            timeout=15,
+            timeout=10,
         )
         log.info("Branding applied to account id=%s", me.id)
     except Exception as e:
         log.warning("Branding failed for account id=%s: %s", me.id, e)
     finally:
-        await client.disconnect()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
     await state.clear()
     display = me.username or me.first_name or "Unknown"
