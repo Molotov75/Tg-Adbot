@@ -1491,6 +1491,7 @@ async def cb_admin_grant_plan(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         await cb.answer("Unauthorized.", show_alert=True)
         return
+    await state.clear()
     await state.set_state(AdminAction.waiting_grant_id)
     await cb.message.answer("Send the user's Telegram ID:")
     await cb.answer()
@@ -1533,6 +1534,10 @@ async def handle_grant_days(msg: Message, state: FSMContext):
     data = await state.get_data()
     uid = data.get("grant_uid")
     plan = data.get("grant_plan")
+    if not uid or not plan:
+        await msg.answer("❌ Session lost. Tap Grant Plan again from the admin panel.")
+        await state.clear()
+        return
     expires = datetime.now(timezone.utc) + timedelta(days=days)
     try:
         async with get_db() as s:
