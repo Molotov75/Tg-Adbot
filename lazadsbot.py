@@ -189,18 +189,6 @@ class BroadcastConfig(Base):
     updated_at        = Column(DateTime,   default=lambda: datetime.now(timezone.utc))
 
 
-class AccessKey(Base):
-    __tablename__  = "access_keys"
-    id             = Column(Integer, primary_key=True, autoincrement=True)
-    key            = Column(String(8),   nullable=False, unique=True)
-    plan           = Column(String(16),  nullable=False)
-    duration_days  = Column(Integer,     nullable=False)
-    used           = Column(Boolean,     default=False)
-    used_by        = Column(BigInteger,  nullable=True)
-    used_at        = Column(DateTime,    nullable=True)
-    created_at     = Column(DateTime,    default=lambda: datetime.now(timezone.utc))
-    created_by     = Column(BigInteger,  nullable=True)
-
 
 class BotSettings(Base):
     __tablename__ = "bot_settings"
@@ -276,8 +264,6 @@ async def init_db():
             "ALTER TABLE broadcast_configs ADD COLUMN IF NOT EXISTS ab_active BOOLEAN DEFAULT FALSE",
             "ALTER TABLE broadcast_configs ADD COLUMN IF NOT EXISTS schedule_start TIMESTAMP",
             "ALTER TABLE broadcast_configs ADD COLUMN IF NOT EXISTS schedule_end TIMESTAMP",
-            "ALTER TABLE access_keys ADD COLUMN IF NOT EXISTS created_by BIGINT",
-            "ALTER TABLE access_keys ADD COLUMN IF NOT EXISTS duration_days INTEGER DEFAULT 30",
         ]
         for sql in migrations:
             try:
@@ -367,9 +353,6 @@ def parse_group_links(text: str) -> list:
     return list(set(links + handles))
 
 
-def gen_key(length: int = 6) -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
 
 def plan_is_active(user: LazUser) -> bool:
     if user.plan == "free":
@@ -420,11 +403,11 @@ class BroadcastSetup(StatesGroup):
 
 
 class AdminAction(StatesGroup):
-    waiting_key_plan     = State()
-    waiting_key_duration = State()
-    waiting_key_count    = State()
-    waiting_announce     = State()
-    waiting_key_revoke   = State()
+    waiting_announce      = State()
+    waiting_grant_id      = State()
+    waiting_grant_plan    = State()
+    waiting_grant_days    = State()
+    waiting_revoke_id     = State()
 
 
 class UserConfig(StatesGroup):
@@ -503,16 +486,15 @@ def kb_upgrade_menu() -> InlineKeyboardMarkup:
         [btn("🥈 Silver — Rs.149/month", "upgrade_silver")],
         [btn("🥇 Gold — Rs.249/month",   "upgrade_gold")],
         [btn("💎 Platinum — Rs.499/month", "upgrade_platinum")],
-        [url_btn("💳 Pay & Get Key", f"https://t.me/{SUBSCRIPTION.lstrip('@')}")],
-        [btn("🔑 Enter Access Key", "enter_key")],
+        [url_btn("💳 Subscribe", f"https://t.me/{SUBSCRIPTION.lstrip('@')}")],
         [btn("◀️ Back", "main_menu")],
     )
 
 
 def kb_admin_panel() -> InlineKeyboardMarkup:
     return ik(
-        [btn("🔑 Generate Key",  "admin_gen_key"),   btn("📋 List Keys",  "admin_list_keys")],
-        [btn("❌ Revoke Key",    "admin_revoke_key"), btn("👥 Users",      "admin_users")],
+        [btn("✅ Grant Plan",    "admin_grant_plan"), btn("❌ Revoke Plan",  "admin_revoke_plan")],
+        [btn("👥 Users",        "admin_users")],
         [btn("⏹ Force Stop All","admin_force_stop"), btn("📢 Announce",   "admin_announce")],
         [btn("⚙️ Bot Config",   "admin_bot_config"),  btn("📊 Stats",     "admin_stats")],
         [btn("📜 Audit Log",    "admin_audit"),        btn("💾 Backup",   "admin_backup")],
@@ -570,37 +552,6 @@ async def cmd_start(msg: Message):
                      reply_markup=kb_main_menu(u.plan, admin))
 
 
-# ── /verify ───────────────────────────────────────────────────
-@router.message(Command("verify"))
-async def cmd_verify(msg: Message):
-    parts = msg.text.split(maxsplit=1)
-    if len(parts) < 2:
-        await msg.answer("Usage: /verify YOURKEY")
-        return
-    key_str = parts[1].strip().upper()
-    async with get_db() as s:
-        r = await s.execute(select(AccessKey).where(AccessKey.key == key_str))
-        ak = r.scalar_one_or_none()
-        if not ak:
-            await msg.answer(f"{ce(E_CROSS,'❌')} <b>Invalid key.</b>", parse_mode="HTML")
-            return
-        if ak.used:
-            await msg.answer(f"{ce(E_WARN,'⚠️')} <b>Key already used.</b>", parse_mode="HTML")
-            return
-        u = await get_or_create_user(s, msg.from_user.id)
-        u.plan = ak.plan
-        u.plan_expires = datetime.now(timezone.utc) + timedelta(days=ak.duration_days)
-        ak.used = True
-        ak.used_by = msg.from_user.id
-        ak.used_at = datetime.now(timezone.utc)
-        await s.commit()
-        plan_label = PLAN_CONFIG.get(ak.plan, {}).get("label", ak.plan)
-    await msg.answer(
-        f"{ce(E_DONE,'✅')} <b>Plan activated!</b>\n\n"
-        f"Plan: <b>{plan_label}</b>\n"
-        f"Expires: <b>{u.plan_expires.strftime('%Y-%m-%d')}</b>",
-        parse_mode="HTML"
-    )
 
 
 # ── /status ───────────────────────────────────────────────────
@@ -651,7 +602,6 @@ async def cmd_help(msg: Message):
     text = (
         f"{ce(E_GOLD,'⭐')} <b>LazAdsBot Commands</b>\n\n"
         "/start — Main menu\n"
-        "/verify KEY — Activate an access key\n"
         "/status — Plan & account status\n"
         "/validity — Check plan expiry\n"
         "/stop — Stop all broadcasts\n"
@@ -758,7 +708,7 @@ async def cb_upgrade_plan(cb: CallbackQuery):
     plan = cb.data.split("_", 1)[1]
     p = PLAN_CONFIG.get(plan, {})
     await cb.answer(
-        f"Pay via {SUBSCRIPTION} then use /verify KEY to activate {p.get('label', plan)}.",
+        f"Contact {SUBSCRIPTION} to activate {p.get('label', plan)}.",
         show_alert=True
     )
 
@@ -794,11 +744,6 @@ async def cb_help_menu(cb: CallbackQuery):
     await edit_or_send(cb, text, kb_back("main_menu"))
     await cb.answer()
 
-
-@router.callback_query(F.data == "enter_key")
-async def cb_enter_key(cb: CallbackQuery):
-    await cb.message.answer("Send: /verify YOURKEY")
-    await cb.answer()
 
 
 # ============================================================
@@ -1540,126 +1485,105 @@ async def cb_admin_panel(cb: CallbackQuery):
     await cb.answer()
 
 
-@router.callback_query(F.data == "admin_gen_key")
-async def cb_admin_gen_key(cb: CallbackQuery, state: FSMContext):
+# ── Grant Plan ────────────────────────────────────────────────
+@router.callback_query(F.data == "admin_grant_plan")
+async def cb_admin_grant_plan(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         await cb.answer("Unauthorized.", show_alert=True)
         return
-    await state.set_state(AdminAction.waiting_key_plan)
-    rows = [[btn(f"{v['label']}", f"akplan_{k}")]
+    await state.set_state(AdminAction.waiting_grant_id)
+    await cb.message.answer("Send the user's Telegram ID:")
+    await cb.answer()
+
+
+@router.message(AdminAction.waiting_grant_id)
+async def handle_grant_id(msg: Message, state: FSMContext):
+    try:
+        uid = int(msg.text.strip())
+    except ValueError:
+        await msg.answer("❌ Send a numeric Telegram ID.")
+        return
+    await state.update_data(grant_uid=uid)
+    await state.set_state(AdminAction.waiting_grant_plan)
+    rows = [[btn(f"{v['label']}", f"gplan_{k}")]
             for k, v in PLAN_CONFIG.items() if k != "free"]
     rows.append([btn("◀️ Cancel", "admin_panel")])
-    await edit_or_send(cb, "Select plan for new key:",
-                       InlineKeyboardMarkup(inline_keyboard=rows))
-    await cb.answer()
+    await msg.answer(f"User: <code>{uid}</code>\nSelect plan:",
+                     parse_mode="HTML",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-@router.callback_query(F.data.startswith("akplan_"))
-async def cb_akplan(cb: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("gplan_"))
+async def cb_gplan(cb: CallbackQuery, state: FSMContext):
     plan = cb.data.split("_", 1)[1]
-    await state.update_data(key_plan=plan)
-    await state.set_state(AdminAction.waiting_key_duration)
-    await cb.message.answer(f"Plan: <b>{plan}</b>\nSend duration in days:", parse_mode="HTML")
+    await state.update_data(grant_plan=plan)
+    await state.set_state(AdminAction.waiting_grant_days)
+    await cb.message.answer(f"Plan: <b>{plan}</b>\nSend duration in days (e.g. 30):",
+                             parse_mode="HTML")
     await cb.answer()
 
 
-@router.message(AdminAction.waiting_key_duration)
-async def handle_key_duration(msg: Message, state: FSMContext):
+@router.message(AdminAction.waiting_grant_days)
+async def handle_grant_days(msg: Message, state: FSMContext):
     try:
         days = int(msg.text.strip())
     except ValueError:
         await msg.answer("❌ Send a number.")
         return
-    await state.update_data(key_duration=days)
-    await state.set_state(AdminAction.waiting_key_count)
-    await msg.answer("How many keys to generate? (1–50)")
-
-
-@router.message(AdminAction.waiting_key_count)
-async def handle_key_count(msg: Message, state: FSMContext):
-    try:
-        count = max(1, min(50, int(msg.text.strip())))
-    except ValueError:
-        await msg.answer("❌ Send a number (1–50).")
-        return
     data = await state.get_data()
-    plan = data.get("key_plan")
-    days = data.get("key_duration")
-    if not plan or days is None:
-        await msg.answer("❌ Session expired. Start over from /admin.")
-        await state.clear()
-        return
-    keys = []
+    uid = data.get("grant_uid")
+    plan = data.get("grant_plan")
+    expires = datetime.now(timezone.utc) + timedelta(days=days)
     try:
         async with get_db() as s:
-            for _ in range(count):
-                k = gen_key(6)
-                s.add(AccessKey(key=k, plan=plan, duration_days=days,
-                                created_by=msg.from_user.id))
-                keys.append(k)
+            u = await get_or_create_user(s, uid)
+            u.plan = plan
+            u.plan_expires = expires
             await s.commit()
     except Exception as e:
-        log.exception("handle_key_count DB error: %s", e)
+        log.exception("grant plan DB error: %s", e)
         await msg.answer(f"❌ DB error: {e}")
         await state.clear()
         return
     await state.clear()
-    key_list = "\n".join(f"<code>{k}</code>" for k in keys)
+    plan_label = PLAN_CONFIG.get(plan, {}).get("label", plan)
     await msg.answer(
-        f"{ce(E_DONE,'✅')} <b>{count} key(s) generated</b>\nPlan: {plan} / {days}d\n\n"
-        + key_list,
+        f"{ce(E_DONE,'✅')} <b>Plan granted!</b>\n\n"
+        f"User: <code>{uid}</code>\n"
+        f"Plan: <b>{plan_label}</b>\n"
+        f"Expires: <b>{expires.strftime('%Y-%m-%d')}</b>",
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data == "admin_list_keys")
-async def cb_admin_list_keys(cb: CallbackQuery):
+# ── Revoke Plan ───────────────────────────────────────────────
+@router.callback_query(F.data == "admin_revoke_plan")
+async def cb_admin_revoke_plan(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         await cb.answer("Unauthorized.", show_alert=True)
         return
-    async with get_db() as s:
-        r = await s.execute(
-            select(AccessKey).where(AccessKey.used == False)
-            .order_by(AccessKey.created_at.desc())
-        )
-        keys = r.scalars().all()
-    if not keys:
-        await cb.answer("No unused keys.", show_alert=True)
-        return
-    lines = [f"<code>{k.key}</code> — {k.plan}/{k.duration_days}d" for k in keys[:30]]
-    await cb.message.answer(
-        f"{ce(E_GOLD,'⭐')} <b>Unused Keys ({len(keys)})</b>\n\n" + "\n".join(lines),
-        parse_mode="HTML"
-    )
+    await state.set_state(AdminAction.waiting_revoke_id)
+    await cb.message.answer("Send the user's Telegram ID to revoke their plan:")
     await cb.answer()
 
 
-@router.callback_query(F.data == "admin_revoke_key")
-async def cb_admin_revoke_key(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id):
-        await cb.answer("Unauthorized.", show_alert=True)
+@router.message(AdminAction.waiting_revoke_id)
+async def handle_revoke_id(msg: Message, state: FSMContext):
+    try:
+        uid = int(msg.text.strip())
+    except ValueError:
+        await msg.answer("❌ Send a numeric Telegram ID.")
         return
-    await state.set_state(AdminAction.waiting_key_revoke)
-    await cb.message.answer("Send the key to revoke:")
-    await cb.answer()
-
-
-@router.message(AdminAction.waiting_key_revoke)
-async def handle_key_revoke(msg: Message, state: FSMContext):
-    key_str = msg.text.strip().upper()
     async with get_db() as s:
-        r = await s.execute(select(AccessKey).where(AccessKey.key == key_str))
-        ak = r.scalar_one_or_none()
-        if not ak:
-            await msg.answer("❌ Key not found.")
-            await state.clear()
-            return
-        ak.used = True
-        ak.used_at = datetime.now(timezone.utc)
+        u = await get_or_create_user(s, uid)
+        u.plan = "free"
+        u.plan_expires = None
         await s.commit()
     await state.clear()
-    await msg.answer(f"{ce(E_DONE,'✅')} Key <code>{key_str}</code> revoked.",
-                     parse_mode="HTML")
+    await msg.answer(
+        f"{ce(E_DONE,'✅')} User <code>{uid}</code> reverted to <b>Free</b> plan.",
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data == "admin_users")
@@ -1738,7 +1662,6 @@ async def cb_admin_stats(cb: CallbackQuery):
         accts = (await s.execute(
             select(HostedAccount).where(HostedAccount.is_active == True)
         )).scalars().all()
-        keys = (await s.execute(select(AccessKey))).scalars().all()
     plan_counts: dict = {}
     for u in users:
         plan_counts[u.plan] = plan_counts.get(u.plan, 0) + 1
@@ -1747,7 +1670,6 @@ async def cb_admin_stats(cb: CallbackQuery):
         f"{ce(E_GOLD,'⭐')} <b>Bot Stats</b>\n\n"
         f"Total users: <b>{len(users)}</b>\n"
         f"Active accounts: <b>{len(accts)}</b>\n"
-        f"Keys total/used: <b>{len(keys)}/{sum(1 for k in keys if k.used)}</b>\n"
         f"Active broadcasts: <b>{len(_broadcast_tasks)}</b>\n\n"
         f"Plans:\n{plan_lines}"
     )
