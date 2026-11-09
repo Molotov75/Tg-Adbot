@@ -82,14 +82,15 @@ log = logging.getLogger(__name__)
 #  CONFIG
 # ═════════════════════════════════════════════════════════════════════════════
 
-BOT_TOKEN      = "9214581560:AAGG5GC7KyalFaSs6tt62yZm9uknmzgYITs"
-ADMIN_IDS      = [8404630327]
-BOT_USERNAME   = "LazAdsbot"
+BOT_TOKEN      = os.getenv("BOT_TOKEN", "9214581560:AAGG5GC7KyalFaSs6tt62yZm9uknmzgYITs")
+ADMIN_IDS      = [int(x) for x in os.getenv("ADMIN_IDS", "8404630327").split(",") if x.strip()]
+BOT_USERNAME   = os.getenv("BOT_USERNAME", "LazAdsbot")
 POWERED_BY     = "@TechnicalDevs"
 MUST_JOIN      = "@TechnicalDevs"
-DATABASE_URL   = (
+DATABASE_URL   = os.getenv(
+    "DATABASE_URL",
     "postgresql+asyncpg://neondb_owner:npg_J2ZtUBWYxz1q"
-    "@ep-green-dew-bd44ci17-pooler.c-8.us-east-2.aws.neon.tech/neondb"
+    "@ep-green-dew-bd44ci17-pooler.c-8.us-east-2.aws.neon.tech/neondb",
 )
 
 TG_API_ID      = int(os.getenv("TG_API_ID", "2040"))
