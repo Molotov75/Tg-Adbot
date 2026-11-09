@@ -86,10 +86,11 @@ TG_API_ID      = int(os.getenv("TG_API_ID",   "33273205"))
 TG_API_HASH    = os.getenv("TG_API_HASH",     "7689254a1a42e86687a33754639d7f35")
 
 PLAN_CONFIG = {
-    "free":     {"label": "Free",      "accounts": 2,  "interval_min": 120, "price": "Free"},
-    "silver":   {"label": "🥈 Silver",  "accounts": 5,  "interval_min": 90,  "price": "Rs.149/month"},
-    "gold":     {"label": "🥇 Gold",    "accounts": 10, "interval_min": 60,  "price": "Rs.249/month"},
-    "platinum": {"label": "💎 Platinum","accounts": 20, "interval_min": 30,  "price": "Rs.499/month"},
+    "free":     {"label": "Free",        "accounts": 2,  "interval_min": 120, "price": "Free"},
+    "silver":   {"label": "🥈 Silver",   "accounts": 5,  "interval_min": 90,  "price": "Rs.149/month"},
+    "gold":     {"label": "🥇 Gold",     "accounts": 10, "interval_min": 60,  "price": "Rs.249/month"},
+    "platinum": {"label": "💎 Platinum", "accounts": 20, "interval_min": 30,  "price": "Rs.499/month"},
+    "business": {"label": "🏢 Business", "accounts": 50, "interval_min": 15,  "price": "Custom"},
 }
 
 # ============================================================
@@ -596,6 +597,12 @@ async def cmd_validity(msg: Message):
     )
 
 
+# ── /myid ────────────────────────────────────────────────────
+@router.message(Command("myid"))
+async def cmd_myid(msg: Message):
+    await msg.answer(f"Your Telegram ID: <code>{msg.from_user.id}</code>", parse_mode="HTML")
+
+
 # ── /help ─────────────────────────────────────────────────────
 @router.message(Command("help"))
 async def cmd_help(msg: Message):
@@ -738,7 +745,7 @@ async def cb_my_status(cb: CallbackQuery):
 async def cb_help_menu(cb: CallbackQuery):
     text = (
         f"{ce(E_GOLD,'⭐')} <b>Help</b>\n\n"
-        "/start /verify /status /validity /stop /change /help\n\n"
+        "/start /status /validity /stop /change /help\n\n"
         f"Support: {POWERED_BY}"
     )
     await edit_or_send(cb, text, kb_back("main_menu"))
@@ -1541,7 +1548,11 @@ async def handle_grant_days(msg: Message, state: FSMContext):
     expires = datetime.now(timezone.utc) + timedelta(days=days)
     try:
         async with get_db() as s:
-            u = await get_or_create_user(s, uid)
+            r = await s.execute(select(LazUser).where(LazUser.id == uid))
+            u = r.scalar_one_or_none()
+            if not u:
+                u = LazUser(id=uid, plan="free")
+                s.add(u)
             u.plan = plan
             u.plan_expires = expires
             await s.commit()
@@ -1579,11 +1590,22 @@ async def handle_revoke_id(msg: Message, state: FSMContext):
     except ValueError:
         await msg.answer("❌ Send a numeric Telegram ID.")
         return
-    async with get_db() as s:
-        u = await get_or_create_user(s, uid)
-        u.plan = "free"
-        u.plan_expires = None
-        await s.commit()
+    try:
+        async with get_db() as s:
+            r = await s.execute(select(LazUser).where(LazUser.id == uid))
+            u = r.scalar_one_or_none()
+            if not u:
+                await msg.answer(f"❌ User <code>{uid}</code> not found in DB.", parse_mode="HTML")
+                await state.clear()
+                return
+            u.plan = "free"
+            u.plan_expires = None
+            await s.commit()
+    except Exception as e:
+        log.exception("revoke plan DB error: %s", e)
+        await msg.answer(f"❌ DB error: {e}")
+        await state.clear()
+        return
     await state.clear()
     await msg.answer(
         f"{ce(E_DONE,'✅')} User <code>{uid}</code> reverted to <b>Free</b> plan.",
