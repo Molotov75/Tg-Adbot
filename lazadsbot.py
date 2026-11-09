@@ -1,6 +1,6 @@
 # ============================================================
 # LazAdsBot — Telegram Userbot Broadcaster
-# Powered by @TechnicalDevs
+# Powered by @Recoveredz
 # ============================================================
 
 from flask import Flask
@@ -85,8 +85,9 @@ log = logging.getLogger(__name__)
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "9214581560:AAGG5GC7KyalFaSs6tt62yZm9uknmzgYITs")
 ADMIN_IDS      = [int(x) for x in os.getenv("ADMIN_IDS", "8404630327").split(",") if x.strip()]
 BOT_USERNAME   = os.getenv("BOT_USERNAME", "LazAdsbot")
-POWERED_BY     = "@TechnicalDevs"
+POWERED_BY     = "@Recoveredz"
 MUST_JOIN      = "@TechnicalDevs"
+SUBSCRIPTION   = "@Recoveredz"
 DATABASE_URL   = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://neondb_owner:npg_J2ZtUBWYxz1q"
@@ -292,8 +293,8 @@ def parse_group_links(text: str) -> List[str]:
 #  KEYBOARDS  —  professional, no emojis
 # ═════════════════════════════════════════════════════════════════════════════
 
-def kb_main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def kb_main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [InlineKeyboardButton(text="Add Account", callback_data="add_account")],
         [
             InlineKeyboardButton(text="Set Advertisement", callback_data="set_ad"),
@@ -305,11 +306,14 @@ def kb_main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Auto Join",   callback_data="auto_join"),
         ],
         [InlineKeyboardButton(text="Upgrade Plan", callback_data="premium")],
-        [
-            InlineKeyboardButton(text="About",       url=f"https://t.me/{BOT_USERNAME}"),
-            InlineKeyboardButton(text=POWERED_BY,    url="https://t.me/TechnicalDevs"),
-        ],
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton(text="Admin Panel", callback_data="admin_panel")])
+    rows.append([
+        InlineKeyboardButton(text="About",      url=f"https://t.me/{BOT_USERNAME}"),
+        InlineKeyboardButton(text="Powered by", url=f"https://t.me/{POWERED_BY.lstrip('@')}"),
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_otp_pad() -> InlineKeyboardMarkup:
@@ -438,10 +442,11 @@ async def send_dashboard(message: Message, user: LazUser, session: AsyncSession,
     limit = plan_account_limit(user.plan)
 
     running = any(a.broadcast_running for a in accts)
-    status  = "Running" if running else "Stopped"
-    service = cfg.service_type or "Not configured"
+    status  = "<b>Running</b>" if running else "Stopped"
     plan_label = user.plan.capitalize()
-    interval_label = f"{cfg.interval_seconds // 60}m {cfg.interval_seconds % 60}s".strip()
+    interval_m = cfg.interval_seconds // 60
+    interval_s = cfg.interval_seconds % 60
+    interval_label = f"{interval_m}m {interval_s}s" if interval_s else f"{interval_m}m"
 
     # count imported groups
     group_count = 0
@@ -451,21 +456,22 @@ async def send_dashboard(message: Message, user: LazUser, session: AsyncSession,
         except Exception:
             pass
 
+    reply_state = "<i>On</i>" if cfg.auto_reply_on else "Off"
+    join_state  = f"<i>On</i> <code>({group_count} groups)</code>" if cfg.auto_join_on else "Off"
+
     text = (
-        f"<b>{bot_name}</b>\n"
-        f"<i>Powered by {POWERED_BY}</i>\n"
-        f"{'─' * 30}\n\n"
-        f"<b>Accounts</b>      {len(accts)} / {limit}\n"
-        f"<b>Broadcast</b>     {status}\n"
-        f"<b>Interval</b>      {interval_label}\n"
-        f"<b>Auto Reply</b>    {'On' if cfg.auto_reply_on else 'Off'}\n"
-        f"<b>Auto Join</b>     {'On' if cfg.auto_join_on else 'Off'}"
-        f"{f'  ({group_count} groups)' if group_count else ''}\n"
-        f"<b>Plan</b>          {plan_label}\n\n"
-        f"{'─' * 30}"
+        f"<b>{bot_name}</b>  <i>— Broadcaster</i>\n"
+        f"<blockquote>Powered by {POWERED_BY}</blockquote>\n\n"
+        f"<b>Accounts</b>       {len(accts)} / {limit}\n"
+        f"<b>Broadcast</b>      {status}\n"
+        f"<b>Interval</b>       <code>{interval_label}</code>\n"
+        f"<b>Auto Reply</b>     {reply_state}\n"
+        f"<b>Auto Join</b>      {join_state}\n"
+        f"<b>Plan</b>           <i>{plan_label}</i>\n"
     )
 
-    await message.answer(text, reply_markup=kb_main_menu())
+    admin = is_admin(user.id)
+    await message.answer(text, reply_markup=kb_main_menu(is_admin=admin))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -490,9 +496,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             [InlineKeyboardButton(text="I have joined", callback_data="check_join")],
         ])
         await message.answer(
-            f"<b>Access Restricted</b>\n\n"
-            f"You must join <b>{MUST_JOIN}</b> before using this bot.\n\n"
-            f"Join the channel and press <b>I have joined</b>.",
+            f"<b>Access Restricted</b>\n"
+            f"<blockquote>Membership required to use this bot.</blockquote>\n\n"
+            f"Join <b>{MUST_JOIN}</b> and press <i>I have joined</i> below.",
             reply_markup=kb,
         )
         return
@@ -548,9 +554,10 @@ async def cb_add_account(cb: CallbackQuery, state: FSMContext) -> None:
         return
 
     await cb.message.edit_text(
-        "<b>Host New Account</b>\n\n"
-        "Enter your phone number with country code.\n\n"
-        "<i>Example: +918824918436</i>",
+        "<b>Host New Account</b>\n"
+        "<blockquote>Your account will be used to send broadcasts.</blockquote>\n\n"
+        "Enter your phone number with country code:\n"
+        "<code>+91XXXXXXXXXX</code>",
         reply_markup=kb_back(),
     )
     await state.set_state(AddAccount.waiting_phone)
@@ -802,10 +809,11 @@ async def cb_set_ad(cb: CallbackQuery, state: FSMContext) -> None:
         cur_ad = cfg.ad_message or "Not set"
 
     await cb.message.edit_text(
-        "<b>Set Advertisement</b>\n\n"
-        f"Current ad:  <i>{cur_ad[:80]}{'...' if len(cur_ad) > 80 else ''}</i>\n"
-        f"Ad suffix:   <code>{suffix}</code>\n\n"
-        "Send your new advertisement message:",
+        "<b>Set Advertisement</b>\n"
+        "<blockquote>This message will be sent to all target groups.</blockquote>\n\n"
+        f"<b>Current:</b>  <i>{cur_ad[:80]}{'...' if len(cur_ad) > 80 else ''}</i>\n"
+        f"<b>Suffix:</b>   <code>{suffix}</code>\n\n"
+        "Send your new advertisement message below:",
         reply_markup=kb_back(),
     )
     await state.set_state(SetAd.waiting_message)
@@ -836,10 +844,11 @@ async def cb_set_interval(cb: CallbackQuery, state: FSMContext) -> None:
         cur = cfg.interval_seconds
 
     await cb.message.edit_text(
-        "<b>Broadcast Interval</b>\n\n"
-        f"Current interval:  {cur}s ({cur // 60} min)\n\n"
-        "Select a preset or send a number (in seconds) for a custom interval.\n\n"
-        "<i>Short intervals increase account risk.</i>",
+        "<b>Broadcast Interval</b>\n"
+        "<blockquote>How often your ad is sent to each group.</blockquote>\n\n"
+        f"<b>Current:</b>  <code>{cur}s</code>  <i>({cur // 60} min)</i>\n\n"
+        "Choose a preset or send a custom number in seconds.\n"
+        "<i>Note: shorter intervals increase account risk.</i>",
         reply_markup=kb_interval(),
     )
     await state.set_state(SetInterval.waiting_custom)
@@ -1039,11 +1048,11 @@ async def cb_auto_reply(cb: CallbackQuery, state: FSMContext) -> None:
         cur_msg = cfg.auto_reply_msg or "Not set"
 
     await cb.message.edit_text(
-        "<b>Auto Reply</b>\n\n"
-        f"Status:   {'Active' if active else 'Inactive'}\n"
-        f"Message:  <i>{cur_msg[:80]}</i>\n\n"
-        "Send a new message to update the auto-reply text.\n"
-        "<i>Auto reply activates during broadcast cycles only.</i>",
+        "<b>Auto Reply</b>\n"
+        "<blockquote>Automatically respond to incoming messages during broadcast.</blockquote>\n\n"
+        f"<b>Status:</b>   <i>{'Active' if active else 'Inactive'}</i>\n"
+        f"<b>Message:</b>  <i>{cur_msg[:80]}</i>\n\n"
+        "Send a new message below to update the auto-reply text.",
         reply_markup=kb_auto_reply(active),
     )
     await state.set_state(SetAutoReply.waiting_message)
@@ -1096,14 +1105,13 @@ async def cb_auto_join(cb: CallbackQuery) -> None:
                 pass
 
     await cb.message.edit_text(
-        "<b>Auto Join</b>\n\n"
-        f"Status:        {'Active' if active else 'Inactive'}\n"
-        f"Groups loaded: {count}\n\n"
-        "When enabled, your hosted accounts will automatically join\n"
-        "all groups in your list before each broadcast cycle.\n\n"
-        "Press <b>Import Group List</b> to upload groups via a .txt file\n"
-        "or paste them as plain text (one per line).\n"
-        "<i>Supported formats: @username, t.me/link, t.me/+invitelink</i>",
+        "<b>Auto Join</b>\n"
+        "<blockquote>Accounts auto-join your group list before each broadcast cycle.</blockquote>\n\n"
+        f"<b>Status:</b>         <i>{'Active' if active else 'Inactive'}</i>\n"
+        f"<b>Groups loaded:</b>  <code>{count}</code>\n\n"
+        "Press <b>Import Group List</b> to upload a <code>.txt</code> file\n"
+        "or paste group links directly (one per line).\n\n"
+        "<i>Formats: @username · t.me/link · t.me/+invitelink</i>",
         reply_markup=kb_auto_join(active),
     )
     await cb.answer()
@@ -1130,13 +1138,13 @@ async def cb_toggle_auto_join(cb: CallbackQuery) -> None:
 
     try:
         await cb.message.edit_text(
-            "<b>Auto Join</b>\n\n"
-            f"Status:        {'Active' if cfg.auto_join_on else 'Inactive'}\n"
-            f"Groups loaded: {count}\n\n"
-            "When enabled, your hosted accounts will automatically join\n"
-            "all groups in your list before each broadcast cycle.\n\n"
-            "Press <b>Import Group List</b> to upload groups via a .txt file\n"
-            "or paste them as plain text (one per line).",
+            "<b>Auto Join</b>\n"
+            "<blockquote>Accounts auto-join your group list before each broadcast cycle.</blockquote>\n\n"
+            f"<b>Status:</b>         <i>{'Active' if cfg.auto_join_on else 'Inactive'}</i>\n"
+            f"<b>Groups loaded:</b>  <code>{count}</code>\n\n"
+            "Press <b>Import Group List</b> to upload a <code>.txt</code> file\n"
+            "or paste group links directly (one per line).\n\n"
+            "<i>Formats: @username · t.me/link · t.me/+invitelink</i>",
             reply_markup=kb_auto_join(cfg.auto_join_on),
         )
     except Exception:
@@ -1231,21 +1239,20 @@ async def handle_auto_join_groups(message: Message, state: FSMContext) -> None:
 async def cb_premium(cb: CallbackQuery) -> None:
     text = (
         "<b>Upgrade Plan</b>\n\n"
-        "──────────────────────────\n\n"
-        "<b>Pro</b>  —  Rs.99 / month\n"
-        "  Accounts:   up to 10\n"
-        "  Interval:   from 60s\n"
-        "  Priority support\n\n"
-        "<b>Business</b>  —  Rs.299 / month\n"
-        "  Accounts:   up to 20\n"
-        "  Interval:   from 30s\n"
-        "  Custom branding\n"
-        "  All Pro features\n\n"
-        f"──────────────────────────\n"
-        f"Contact {POWERED_BY} to upgrade."
+        "<blockquote>Unlock more accounts and faster intervals.</blockquote>\n\n"
+        "<b>Pro</b>\n"
+        "  · Accounts up to <code>10</code>\n"
+        "  · Interval from <code>60s</code>\n"
+        "  · Priority support\n\n"
+        "<b>Business</b>\n"
+        "  · Accounts up to <code>20</code>\n"
+        "  · Interval from <code>30s</code>\n"
+        "  · Custom branding\n"
+        "  · All Pro features\n\n"
+        f"<i>Message {SUBSCRIPTION} to subscribe.</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Contact {POWERED_BY}", url="https://t.me/TechnicalDevs")],
+        [InlineKeyboardButton(text=f"Contact {SUBSCRIPTION}", url=f"https://t.me/{SUBSCRIPTION.lstrip('@')}")],
         [InlineKeyboardButton(text="Back", callback_data="dashboard")],
     ])
     await cb.message.edit_text(text, reply_markup=kb)
@@ -1260,7 +1267,11 @@ async def cb_premium(cb: CallbackQuery) -> None:
 async def cmd_admin(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
-    await message.answer("<b>Admin Panel</b>", reply_markup=kb_admin_panel())
+    await message.answer(
+        "<b>Admin Panel</b>\n"
+        "<blockquote>Manage users, broadcast, and bot settings.</blockquote>",
+        reply_markup=kb_admin_panel(),
+    )
 
 
 @router.callback_query(F.data == "admin_stats")
@@ -1288,8 +1299,13 @@ async def cb_admin_stats(cb: CallbackQuery) -> None:
 @router.callback_query(F.data == "admin_panel")
 async def cb_admin_panel_back(cb: CallbackQuery) -> None:
     if not is_admin(cb.from_user.id):
+        await cb.answer("Unauthorized.", show_alert=True)
         return
-    await cb.message.edit_text("<b>Admin Panel</b>", reply_markup=kb_admin_panel())
+    await cb.message.edit_text(
+        "<b>Admin Panel</b>\n"
+        "<blockquote>Manage users, broadcast, and bot settings.</blockquote>",
+        reply_markup=kb_admin_panel(),
+    )
     await cb.answer()
 
 
