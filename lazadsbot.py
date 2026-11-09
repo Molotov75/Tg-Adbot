@@ -94,8 +94,8 @@ DATABASE_URL   = os.getenv(
     "@ep-green-dew-bd44ci17-pooler.c-8.us-east-2.aws.neon.tech/neondb",
 )
 
-TG_API_ID      = int(os.getenv("TG_API_ID", "2040"))
-TG_API_HASH    = os.getenv("TG_API_HASH", "b18441a1ff607e10a989891a5462e627")
+TG_API_ID      = int(os.getenv("TG_API_ID", "33273205"))
+TG_API_HASH    = os.getenv("TG_API_HASH", "7689254a1a42e86687a33754639d7f35")
 
 MAX_FREE_ACCOUNTS  = 2
 MAX_PRO_ACCOUNTS   = 10
