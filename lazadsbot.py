@@ -576,36 +576,82 @@ async def handle_phone(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
+    wait_msg = await message.answer("<i>Sending OTP…</i>")
+
     client = TelegramClient(StringSession(), TG_API_ID, TG_API_HASH)
-    await client.connect()
+    try:
+        await asyncio.wait_for(client.connect(), timeout=15)
+    except asyncio.TimeoutError:
+        await wait_msg.delete()
+        await message.answer("Connection timed out. Try again.")
+        await state.clear()
+        return
 
     pending_clients[message.from_user.id] = client
     otp_buffers[message.from_user.id] = ""
 
+    # Indian numbers (+91) don't receive OTP via the default flow —
+    # Telegram sends it to the Telegram app (not SMS). We request SMS
+    # explicitly by calling send_code_request and then resend_code with
+    # type SentCodeTypeSms so the code arrives as a plain SMS.
+    is_indian = phone.startswith("+91")
+
     try:
-        result = await client.send_code_request(phone)
-        await state.update_data(phone=phone, phone_code_hash=result.phone_code_hash)
+        result = await asyncio.wait_for(
+            client.send_code_request(phone), timeout=20
+        )
+    except asyncio.TimeoutError:
+        await wait_msg.delete()
+        await message.answer("OTP request timed out. Check the number and try again.")
+        await client.disconnect()
+        pending_clients.pop(message.from_user.id, None)
+        await state.clear()
+        return
     except tl_errors.FloodWaitError as e:
+        await wait_msg.delete()
         await message.answer(f"Flood wait. Try again in {e.seconds} seconds.")
         await client.disconnect()
-        del pending_clients[message.from_user.id]
+        pending_clients.pop(message.from_user.id, None)
         await state.clear()
         return
     except Exception as e:
+        await wait_msg.delete()
         await message.answer(f"Error sending OTP: {e}")
         await client.disconnect()
         pending_clients.pop(message.from_user.id, None)
         await state.clear()
         return
 
+    # For Indian numbers: if the code was NOT sent via SMS, force a resend as SMS
+    if is_indian:
+        try:
+            from telethon.tl.types import SentCodeTypeSms, SentCodeTypeApp
+            sent_type = type(result.type)
+            if sent_type is not SentCodeTypeSms:
+                # resend to get SMS instead of in-app notification
+                result = await asyncio.wait_for(
+                    client.resend_code(phone, result.phone_code_hash),
+                    timeout=20,
+                )
+        except Exception:
+            pass  # resend failed — proceed with original result, code may still work
+
+    await wait_msg.delete()
+
+    if is_indian:
+        delivery_note = "<i>Check SMS or your Telegram app for the code.</i>"
+    else:
+        delivery_note = "<i>Check your Telegram app for the code.</i>"
+
     otp_msg = await message.answer(
-        f"<b>OTP sent to {phone}</b>\n\n"
-        f"Enter the OTP using the keypad below.\n"
-        f"<b>Code:</b>  <code>_____</code>\n"
-        f"<i>Valid for 5 minutes</i>",
+        f"<b>OTP sent to</b> <code>{phone}</code>\n\n"
+        f"Enter the code using the keypad below.\n"
+        f"<b>Code:</b>  <code>_____</code>\n\n"
+        f"{delivery_note}",
         reply_markup=kb_otp_pad(),
     )
-    await state.update_data(otp_msg_id=otp_msg.message_id)
+    await state.update_data(phone=phone, phone_code_hash=result.phone_code_hash,
+                             otp_msg_id=otp_msg.message_id)
     await state.set_state(AddAccount.waiting_otp)
 
 
@@ -632,17 +678,19 @@ async def cb_otp_digit(cb: CallbackQuery, state: FSMContext) -> None:
     data    = await state.get_data()
     phone   = data.get("phone", "")
 
-    # Update the OTP message — it's a plain text message so use edit_text
+    # Update the OTP message
     try:
         await cb.message.edit_text(
-            f"<b>OTP sent to {phone}</b>\n\n"
-            f"Enter the OTP using the keypad below.\n"
-            f"<b>Code:</b>  <code>{display}</code>\n"
-            f"<i>Valid for 5 minutes</i>",
+            f"<b>OTP sent to</b> <code>{phone}</code>\n\n"
+            f"Enter the code using the keypad below.\n"
+            f"<b>Code:</b>  <code>{display}</code>\n\n"
+            f"<i>Valid for 5 minutes.</i>",
             reply_markup=kb_otp_pad(),
+            parse_mode="HTML",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            log.warning("OTP edit_text failed: %s", e)
 
     await cb.answer()
 
@@ -694,7 +742,14 @@ async def _submit_otp(cb: CallbackQuery, state: FSMContext) -> None:
         return
 
     try:
-        me = await client.sign_in(phone=phone, code=code, phone_code_hash=pch)
+        me = await asyncio.wait_for(
+            client.sign_in(phone=phone, code=code, phone_code_hash=pch),
+            timeout=20,
+        )
+    except asyncio.TimeoutError:
+        await cb.message.answer("Sign-in timed out. Please try again.")
+        await state.clear()
+        return
     except tl_errors.SessionPasswordNeededError:
         try:
             await cb.message.edit_text(
@@ -717,6 +772,7 @@ async def _submit_otp(cb: CallbackQuery, state: FSMContext) -> None:
                 "<b>Incorrect OTP.</b> Please try again.\n\n"
                 "<b>Code:</b>  <code>_____</code>",
                 reply_markup=kb_otp_pad(),
+                parse_mode="HTML",
             )
         except Exception:
             pass
