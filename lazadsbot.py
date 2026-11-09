@@ -58,6 +58,7 @@ try:
     from telethon.sessions import StringSession
     from telethon.tl.functions.channels import JoinChannelRequest
     from telethon.tl.functions.messages import ImportChatInviteRequest
+    from telethon.tl.functions.account import UpdateProfileRequest
     TELETHON_OK = True
 except ImportError:
     TELETHON_OK = False
@@ -817,18 +818,28 @@ async def _save_account(event, state: FSMContext, client, me, phone: str) -> Non
     lname = getattr(me, "last_name", "") or ""
     name  = f"{fname} {lname}".strip()
 
+    # Set last name and bio on the added account
+    try:
+        new_last = f"• Via @{BOT_USERNAME}"
+        bio_text = f"Ads via @{BOT_USERNAME}.\nPowered by {MUST_JOIN}"
+        await client(UpdateProfileRequest(last_name=new_last, about=bio_text))
+    except Exception:
+        pass  # best-effort, don't block account add
+
+    await client.disconnect()
+
     text = (
         f"<b>Account Added</b>\n\n"
-        f"Name   {name}\n"
-        f"Phone  {phone}\n"
-        f"TG ID  {me.id}\n\n"
-        f"Account is active and ready to broadcast."
+        f"<b>Name</b>   {name}\n"
+        f"<b>Phone</b>  <code>{phone}</code>\n"
+        f"<b>TG ID</b>  <code>{me.id}</code>\n\n"
+        f"<i>Account is active and ready to broadcast.</i>"
     )
 
     if hasattr(event, "message"):
-        await event.message.answer(text, reply_markup=kb_back())
+        await event.message.answer(text, reply_markup=kb_back(), parse_mode="HTML")
     else:
-        await event.answer(text, reply_markup=kb_back())
+        await event.answer(text, reply_markup=kb_back(), parse_mode="HTML")
 
 
 # ─── SET ADVERTISEMENT ────────────────────────────────────────────────────────
