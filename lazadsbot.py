@@ -276,6 +276,8 @@ async def init_db():
             "ALTER TABLE broadcast_configs ADD COLUMN IF NOT EXISTS ab_active BOOLEAN DEFAULT FALSE",
             "ALTER TABLE broadcast_configs ADD COLUMN IF NOT EXISTS schedule_start TIMESTAMP",
             "ALTER TABLE broadcast_configs ADD COLUMN IF NOT EXISTS schedule_end TIMESTAMP",
+            "ALTER TABLE access_keys ADD COLUMN IF NOT EXISTS created_by BIGINT",
+            "ALTER TABLE access_keys ADD COLUMN IF NOT EXISTS duration_days INTEGER DEFAULT 30",
         ]
         for sql in migrations:
             try:
@@ -1578,22 +1580,29 @@ async def handle_key_count(msg: Message, state: FSMContext):
     try:
         count = max(1, min(50, int(msg.text.strip())))
     except ValueError:
-        await msg.answer("❌ Send a number.")
+        await msg.answer("❌ Send a number (1–50).")
         return
     data = await state.get_data()
-    plan = data["key_plan"]
-    days = data["key_duration"]
+    plan = data.get("key_plan")
+    days = data.get("key_duration")
+    if not plan or days is None:
+        await msg.answer("❌ Session expired. Start over from /admin.")
+        await state.clear()
+        return
     keys = []
-    async with get_db() as s:
-        for _ in range(count):
-            k = gen_key(6)
-            s.add(AccessKey(key=k, plan=plan, duration_days=days,
-                            created_by=msg.from_user.id))
-            keys.append(k)
-        await s.commit()
-    async with get_db() as s:
-        await add_audit(s, msg.from_user.id, "gen_keys",
-                        details=f"{count}x {plan} {days}d")
+    try:
+        async with get_db() as s:
+            for _ in range(count):
+                k = gen_key(6)
+                s.add(AccessKey(key=k, plan=plan, duration_days=days,
+                                created_by=msg.from_user.id))
+                keys.append(k)
+            await s.commit()
+    except Exception as e:
+        log.exception("handle_key_count DB error: %s", e)
+        await msg.answer(f"❌ DB error: {e}")
+        await state.clear()
+        return
     await state.clear()
     key_list = "\n".join(f"<code>{k}</code>" for k in keys)
     await msg.answer(
@@ -1648,8 +1657,6 @@ async def handle_key_revoke(msg: Message, state: FSMContext):
         ak.used = True
         ak.used_at = datetime.now(timezone.utc)
         await s.commit()
-    async with get_db() as s:
-        await add_audit(s, msg.from_user.id, "revoke_key", target=key_str)
     await state.clear()
     await msg.answer(f"{ce(E_DONE,'✅')} Key <code>{key_str}</code> revoked.",
                      parse_mode="HTML")
