@@ -87,7 +87,7 @@ BOT_TOKEN      = os.getenv("BOT_TOKEN", "9214581560:AAGG5GC7KyalFaSs6tt62yZm9ukn
 ADMIN_IDS      = [int(x) for x in os.getenv("ADMIN_IDS", "8404630327").split(",") if x.strip()]
 BOT_USERNAME   = os.getenv("BOT_USERNAME", "LazAdsbot")
 POWERED_BY     = "@Recoveredz"
-MUST_JOIN      = "@TechnicalDevs"
+MUST_JOIN      = "@Factuals"
 SUBSCRIPTION   = "@Recoveredz"
 DATABASE_URL   = os.getenv(
     "DATABASE_URL",
@@ -107,7 +107,7 @@ PLAN_PRICES = {
     "pro":      {"label": "Pro",      "price": "Rs.99/month",  "accounts": 10, "interval_min": 60},
     "business": {"label": "Business", "price": "Rs.299/month", "accounts": 20, "interval_min": 30},
 }
-
+Fuctuals
 # ═════════════════════════════════════════════════════════════════════════════
 #  DATABASE
 # ═════════════════════════════════════════════════════════════════════════════
